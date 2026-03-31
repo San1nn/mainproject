@@ -17,12 +17,21 @@ class FirebaseRoomService {
   /// Get all rooms
   Future<List<Room>> getAllRooms() async {
     try {
-      final querySnapshot =
-          await _firestore.collection(_roomsCollection).get();
+      final querySnapshot = await _firestore.collection(_roomsCollection).get();
       return querySnapshot.docs.map((doc) => _roomFromDoc(doc)).toList();
     } catch (e) {
       throw Exception('Failed to fetch rooms: $e');
     }
+  }
+
+  /// Watch all rooms
+  Stream<List<Room>> watchAllRooms() {
+    return _firestore
+        .collection(_roomsCollection)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs.map((doc) => _roomFromDoc(doc)).toList(),
+        );
   }
 
   /// Get public rooms
@@ -31,7 +40,6 @@ class FirebaseRoomService {
       final querySnapshot = await _firestore
           .collection(_roomsCollection)
           .where('type', isEqualTo: 'public')
-          .orderBy('createdAt', descending: true)
           .get();
       return querySnapshot.docs.map((doc) => _roomFromDoc(doc)).toList();
     } catch (e) {
@@ -46,7 +54,6 @@ class FirebaseRoomService {
           .collection(_roomsCollection)
           .where('type', isEqualTo: 'private')
           .where('memberIds', arrayContains: userId)
-          .orderBy('updatedAt', descending: true)
           .get();
       return querySnapshot.docs.map((doc) => _roomFromDoc(doc)).toList();
     } catch (e) {
@@ -60,7 +67,6 @@ class FirebaseRoomService {
       final querySnapshot = await _firestore
           .collection(_roomsCollection)
           .where('memberIds', arrayContains: userId)
-          .orderBy('updatedAt', descending: true)
           .get();
       return querySnapshot.docs.map((doc) => _roomFromDoc(doc)).toList();
     } catch (e) {
@@ -71,8 +77,10 @@ class FirebaseRoomService {
   /// Get room by ID
   Future<Room?> getRoomById(String roomId) async {
     try {
-      final doc =
-          await _firestore.collection(_roomsCollection).doc(roomId).get();
+      final doc = await _firestore
+          .collection(_roomsCollection)
+          .doc(roomId)
+          .get();
       if (doc.exists) {
         return _roomFromDoc(doc);
       }
@@ -97,9 +105,11 @@ class FirebaseRoomService {
       // Fallback to client-side search
       final allRooms = await getAllRooms();
       return allRooms
-          .where((room) =>
-              room.name.toLowerCase().contains(query.toLowerCase()) ||
-              room.description.toLowerCase().contains(query.toLowerCase()))
+          .where(
+            (room) =>
+                room.name.toLowerCase().contains(query.toLowerCase()) ||
+                room.description.toLowerCase().contains(query.toLowerCase()),
+          )
           .toList();
     }
   }
@@ -110,6 +120,7 @@ class FirebaseRoomService {
     required String description,
     required RoomType type,
     required String creatorId,
+    String? password,
     List<String>? initialMembers,
   }) async {
     try {
@@ -124,6 +135,7 @@ class FirebaseRoomService {
         'type': type.toString().split('.').last,
         'creatorId': creatorId,
         'memberIds': members,
+        'password': password,
         'createdAt': now.toIso8601String(),
         'updatedAt': now.toIso8601String(),
       };
@@ -136,7 +148,8 @@ class FirebaseRoomService {
         description: description,
         type: type,
         creatorId: creatorId,
-        memberIds: members,
+        memberIds: List<String>.from(members),
+        password: password,
         createdAt: now,
         updatedAt: now,
       );
@@ -174,6 +187,7 @@ class FirebaseRoomService {
     required String roomId,
     String? name,
     String? description,
+    String? password,
   }) async {
     try {
       final updateData = <String, dynamic>{
@@ -182,8 +196,12 @@ class FirebaseRoomService {
 
       if (name != null) updateData['name'] = name;
       if (description != null) updateData['description'] = description;
+      if (password != null) updateData['password'] = password;
 
-      await _firestore.collection(_roomsCollection).doc(roomId).update(updateData);
+      await _firestore
+          .collection(_roomsCollection)
+          .doc(roomId)
+          .update(updateData);
 
       final room = await getRoomById(roomId);
       if (room == null) throw Exception('Room not found');
@@ -193,10 +211,24 @@ class FirebaseRoomService {
     }
   }
 
-  /// Delete a room
+  /// Delete a room and its associated messages
   Future<void> deleteRoom(String roomId) async {
     try {
-      await _firestore.collection(_roomsCollection).doc(roomId).delete();
+      // 1. Delete all messages associated with the room
+      final messagesSnapshot = await _firestore
+          .collection('messages')
+          .where('roomId', isEqualTo: roomId)
+          .get();
+
+      final batch = _firestore.batch();
+      for (var doc in messagesSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      // 2. Delete the room document
+      batch.delete(_firestore.collection(_roomsCollection).doc(roomId));
+
+      await batch.commit();
     } catch (e) {
       throw Exception('Failed to delete room: $e');
     }
@@ -235,28 +267,84 @@ class FirebaseRoomService {
     return _firestore
         .collection(_roomsCollection)
         .where('memberIds', arrayContains: userId)
-        .orderBy('updatedAt', descending: true)
         .snapshots()
-        .map((snapshot) => snapshot.docs.map((doc) => _roomFromDoc(doc)).toList());
+        .map(
+          (snapshot) => snapshot.docs.map((doc) => _roomFromDoc(doc)).toList(),
+        );
+  }
+
+  /// Request to join a private room
+  Future<void> requestToJoin(String roomId, String userId) async {
+    try {
+      await _firestore.collection(_roomsCollection).doc(roomId).update({
+        'pendingRequests': FieldValue.arrayUnion([userId]),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      throw Exception('Failed to send join request: $e');
+    }
+  }
+
+  /// Accept a join request (move user from pendingRequests to memberIds)
+  Future<void> acceptJoinRequest(String roomId, String userId) async {
+    try {
+      await _firestore.collection(_roomsCollection).doc(roomId).update({
+        'pendingRequests': FieldValue.arrayRemove([userId]),
+        'memberIds': FieldValue.arrayUnion([userId]),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      throw Exception('Failed to accept join request: $e');
+    }
+  }
+
+  /// Reject a join request (remove user from pendingRequests)
+  Future<void> rejectJoinRequest(String roomId, String userId) async {
+    try {
+      await _firestore.collection(_roomsCollection).doc(roomId).update({
+        'pendingRequests': FieldValue.arrayRemove([userId]),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      throw Exception('Failed to reject join request: $e');
+    }
+  }
+
+  /// Watch rooms with pending requests (for room creators)
+  Stream<List<Room>> watchRoomsWithPendingRequests(String creatorId) {
+    return _firestore
+        .collection(_roomsCollection)
+        .where('creatorId', isEqualTo: creatorId)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => _roomFromDoc(doc))
+              .where((room) => room.pendingRequests.isNotEmpty)
+              .toList();
+        });
   }
 
   /// Convert Firestore document to Room model
   Room _roomFromDoc(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     return Room(
-      id: data['id'] ?? doc.id,
-      name: data['name'] ?? '',
-      description: data['description'] ?? '',
+      id: data['id']?.toString() ?? doc.id,
+      name: data['name']?.toString() ?? '',
+      description: data['description']?.toString() ?? '',
       type: data['type'] == 'public' ? RoomType.public : RoomType.private,
-      creatorId: data['creatorId'] ?? '',
+      creatorId: data['creatorId']?.toString() ?? '',
       memberIds: List<String>.from(data['memberIds'] ?? []),
-      createdAt: DateTime.parse(data['createdAt'] ?? DateTime.now().toIso8601String()),
+      pendingRequests: List<String>.from(data['pendingRequests'] ?? []),
+      password: data['password']?.toString(),
+      createdAt: data['createdAt'] != null
+          ? DateTime.tryParse(data['createdAt'].toString()) ?? DateTime.now()
+          : DateTime.now(),
       updatedAt: data['updatedAt'] != null
-          ? DateTime.parse(data['updatedAt'])
+          ? DateTime.tryParse(data['updatedAt'].toString())
           : null,
-      lastMessagePreview: data['lastMessagePreview'],
+      lastMessagePreview: data['lastMessagePreview']?.toString(),
       lastMessageTime: data['lastMessageTime'] != null
-          ? DateTime.parse(data['lastMessageTime'])
+          ? DateTime.tryParse(data['lastMessageTime'].toString())
           : null,
     );
   }

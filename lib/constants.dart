@@ -6,38 +6,80 @@ import 'package:flutter/material.dart';
 
 /// Application color constants
 class AppColors {
-  // Primary colors
-  static const Color primary = Color(0xFF2563EB);
-  static const Color primaryLight = Color(0xFF3B82F6);
-  static const Color primaryDark = Color(0xFF1E40AF);
+  // Primary colors (Vibrant Indigo/Blue)
+  static const Color primary = Color(0xFF6366F1);
+  static const Color primaryLight = Color(0xFF818CF8);
+  static const Color primaryDark = Color(0xFF4F46E5);
 
-  // Secondary colors
+  // Secondary colors (Emerald/Teal)
   static const Color secondary = Color(0xFF10B981);
   static const Color secondaryLight = Color(0xFF34D399);
   static const Color secondaryDark = Color(0xFF059669);
 
-  // Neutral colors
-  static const Color background = Color(0xFFF9FAFB);
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceVariant = Color(0xFFF3F4F6);
+  // Background colors (Deep Slates)
+  static const Color background = Color(0xFF0F172A);
+  static const Color surface = Color(0xFF1E293B);
+  static const Color surfaceVariant = Color(0xFF334155);
+  static const Color cardBackground = Color(0xFF1E293B);
 
   // Text colors
-  static const Color textPrimary = Color(0xFF111827);
-  static const Color textSecondary = Color(0xFF6B7280);
-  static const Color textTertiary = Color(0xFF9CA3AF);
+  static const Color textPrimary = Color(0xFFF8FAFC);
+  static const Color textSecondary = Color(0xFF94A3B8);
+  static const Color textTertiary = Color(0xFF64748B);
 
   // Status colors
   static const Color success = Color(0xFF10B981);
   static const Color error = Color(0xFFEF4444);
-  static const Color warning = Color(0xFFFB923C);
+  static const Color warning = Color(0xFFF59E0B);
   static const Color info = Color(0xFF3B82F6);
 
-  // Borders
-  static const Color border = Color(0xFFE5E7EB);
-  static const Color borderDark = Color(0xFFD1D5DB);
+  // Borders & Dividers
+  static const Color border = Color(0xFF334155);
+  static const Color borderLight = Color(0xFF475569);
+  static const Color borderDark = Color(0xFF1E293B);
 
   // Overlay
-  static const Color overlay = Color(0x33000000);
+  static const Color overlay = Color(0x66000000);
+
+  // Accents
+  static const Color accentGrape = Color(0xFF8B5CF6);
+  static const Color accentRose = Color(0xFFF43F5E);
+}
+
+// ============================================================================
+// CLOUDINARY CONFIGURATION
+// ============================================================================
+
+/// Cloudinary configuration for media uploads (voice messages, etc.)
+///
+/// Setup instructions:
+/// 1. Go to https://cloudinary.com and sign up (free)
+/// 2. From your Dashboard, copy your "Cloud Name"
+/// 3. Go to Settings → Upload → Upload Presets
+/// 4. Click "Add upload preset"
+/// 5. Set "Signing Mode" to "Unsigned"
+/// 6. Set folder to "voice_messages" (optional)
+/// 7. Save and copy the preset name
+class CloudinaryConfig {
+  static const String cloudName = 'df74bjuye'; // ← Replace with your cloud name
+  static const String uploadPreset =
+      'voice_uploads'; // ← Replace with your unsigned upload preset name
+
+  static String get uploadUrl =>
+      'https://api.cloudinary.com/v1_1/$cloudName/auto/upload';
+}
+
+// ============================================================================
+// GEMINI AI CONFIGURATION
+// ============================================================================
+
+/// Google Gemini AI configuration for chat summarization (via Firebase AI Logic)
+class GeminiConfig {
+  /// Model to use — gemini-2.5-flash-lite is the recommended free-tier model
+  static const String model = 'gemini-2.5-flash-lite';
+
+  /// Minimum message length (in characters) to show the summarize option
+  static const int minLengthForSummary = 100;
 }
 
 // ============================================================================
@@ -64,9 +106,10 @@ class AppStrings {
 
   // Validation
   static const String emailRequired = 'Email is required';
-  static const String emailInvalid = 'Enter a valid email';
+  static const String emailInvalid = 'email is not valid';
   static const String passwordRequired = 'Password is required';
-  static const String passwordTooShort = 'Password must be at least 6 characters';
+  static const String passwordTooShort =
+      'Password must be at least 6 characters';
   static const String passwordMismatch = 'Passwords do not match';
   static const String nameRequired = 'Name is required';
 

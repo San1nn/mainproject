@@ -1,164 +1,110 @@
-/// Content Moderation Service
-/// Handles detection and filtering of inappropriate content
+import 'package:flutter/foundation.dart';
+import 'package:firebase_ai/firebase_ai.dart';
+import 'package:mainproject/constants.dart';
+
+/// AI-powered Content Moderation Service
 class ContentModerationService {
   static final ContentModerationService _instance =
       ContentModerationService._internal();
 
-  factory ContentModerationService() {
-    return _instance;
-  }
+  factory ContentModerationService() => _instance;
 
   ContentModerationService._internal();
 
-  /// List of inappropriate words/phrases to filter
-  static const Set<String> _inappropriateWords = {
-    'hate',
-    'stupid',
-    'idiot',
-    'dumb',
-    'ugly',
-    'loser',
-    'useless',
-    'pathetic',
-    'disgusting',
-    'terrible',
+  /// Gemini model instance (lazy-initialized)
+  GenerativeModel? _model;
+
+  GenerativeModel get _geminiModel {
+    _model ??= FirebaseAI.googleAI().generativeModel(
+      model: GeminiConfig.model,
+      generationConfig: GenerationConfig(
+        temperature: 0.1, // Low temperature for consistent classification
+        maxOutputTokens: 20,
+      ),
+    );
+    return _model!;
+  }
+
+  /// List of common inappropriate words (fast local check)
+  static const Set<String> _localProfanityList = {
+    'hate', 'stupid', 'idiot', 'dumb', 'loser', 'kill', 'die',
+    // In a real app, this list would be much longer
   };
 
-  /// Check if content contains inappropriate language
-  Future<bool> containsFoulLanguage(String content) async {
-    // Simulate API call
-    await Future.delayed(const Duration(milliseconds: 300));
+  /// Check if content contains foul language (hybrid approach)
+  Future<ModerationResult> checkContent(String content) async {
+    if (content.trim().isEmpty) {
+      return ModerationResult.approved();
+    }
 
+    // 1. Fast Local Check
     final lowerContent = content.toLowerCase();
-
-    for (var word in _inappropriateWords) {
+    for (var word in _localProfanityList) {
       if (lowerContent.contains(word)) {
-        return true;
+        return ModerationResult.rejected(
+          reason: 'Inappropriate language detected (Local Filter)',
+        );
       }
     }
 
-    return false;
+    // 2. AI Check (Gemini) for context-aware moderation
+    try {
+      final prompt =
+          '''
+You are a content moderator for a student collaboration app. 
+Analyze the following message and determine if it contains foul language, hate speech, bullying, or highly inappropriate content.
+
+Rules:
+- If inappropriate: Respond only with "REJECTED: [short reason]"
+- If appropriate: Respond only with "APPROVED"
+
+Message:
+"""
+$content
+"""
+''';
+
+      final response = await _geminiModel.generateContent([
+        Content.text(prompt),
+      ]);
+
+      final result = response.text?.trim() ?? 'APPROVED';
+
+      if (result.startsWith('REJECTED')) {
+        final reason = result.replaceFirst('REJECTED:', '').trim();
+        return ModerationResult.rejected(
+          reason: reason.isEmpty ? 'Inappropriate content' : reason,
+        );
+      }
+
+      return ModerationResult.approved();
+    } catch (e) {
+      debugPrint('Moderation error: $e');
+      // If AI fails, we fall back to manual approval or just local check
+      return ModerationResult.approved();
+    }
   }
 
-  /// Filter inappropriate words from content
-  Future<String> filterContent(String content) async {
-    await Future.delayed(const Duration(milliseconds: 250));
-
+  /// Simple filter to mask bad words (Local only)
+  String maskProfanity(String content) {
     String filtered = content;
-
-    for (var word in _inappropriateWords) {
-      final regex = RegExp(word, caseSensitive: false);
-      filtered = filtered.replaceAll(regex, '*' * word.length);
-    }
-
-    return filtered;
-  }
-
-  /// Get flagged words in content
-  Future<List<String>> getFlaggedWords(String content) async {
-    await Future.delayed(const Duration(milliseconds: 200));
-
     final lowerContent = content.toLowerCase();
-    final flaggedWords = <String>[];
 
-    for (var word in _inappropriateWords) {
+    for (var word in _localProfanityList) {
       if (lowerContent.contains(word)) {
-        flaggedWords.add(word);
+        final regex = RegExp(RegExp.escape(word), caseSensitive: false);
+        filtered = filtered.replaceAll(regex, '*' * word.length);
       }
     }
-
-    return flaggedWords;
-  }
-
-  /// Check if content is spam
-  Future<bool> isSpam(String content) async {
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    // Simple spam detection logic
-    final allCaps = content.toUpperCase() == content && content.length > 10;
-    final excessiveSpecialChars =
-        RegExp(r'[!@#$%^&*]{3,}').hasMatch(content);
-    final repetitiveText = RegExp(r'(.)\1{4,}').hasMatch(content);
-    final urlLikePattern = RegExp(r'https?://|www\.|\.com|\.net');
-
-    return allCaps || excessiveSpecialChars || repetitiveText || urlLikePattern.hasMatch(content);
-  }
-
-  /// Get moderation score (0.0 to 1.0)
-  /// 0.0 = fully appropriate, 1.0 = highly inappropriate
-  Future<double> getModerationScore(String content) async {
-    await Future.delayed(const Duration(milliseconds: 350));
-
-    double score = 0.0;
-
-    // Check for foul language
-    if (await containsFoulLanguage(content)) {
-      score += 0.5;
-    }
-
-    // Check for spam
-    if (await isSpam(content)) {
-      score += 0.3;
-    }
-
-    // Check length
-    if (content.length > 500) {
-      score += 0.1;
-    }
-
-    return score.clamp(0.0, 1.0);
-  }
-
-  /// Generate moderation report for content
-  Future<ModerationReport> generateModerationReport(String content) async {
-    final hasFoulLanguage = await containsFoulLanguage(content);
-    final isSpamContent = await isSpam(content);
-    final score = await getModerationScore(content);
-    final flaggedWords = await getFlaggedWords(content);
-
-    return ModerationReport(
-      content: content,
-      hasFoulLanguage: hasFoulLanguage,
-      isSpam: isSpamContent,
-      moderationScore: score,
-      flaggedWords: flaggedWords,
-      isApproved: score < 0.5,
-      requiresReview: score >= 0.3 && score < 0.7,
-      timestamp: DateTime.now(),
-    );
+    return filtered;
   }
 }
 
-/// Moderation report data class
-class ModerationReport {
-  final String content;
-  final bool hasFoulLanguage;
-  final bool isSpam;
-  final double moderationScore;
-  final List<String> flaggedWords;
+/// Result of content moderation
+class ModerationResult {
   final bool isApproved;
-  final bool requiresReview;
-  final DateTime timestamp;
+  final String? reason;
 
-  ModerationReport({
-    required this.content,
-    required this.hasFoulLanguage,
-    required this.isSpam,
-    required this.moderationScore,
-    required this.flaggedWords,
-    required this.isApproved,
-    required this.requiresReview,
-    required this.timestamp,
-  });
-
-  /// Get status string
-  String get status {
-    if (isApproved) return 'Approved';
-    if (requiresReview) return 'Review Required';
-    return 'Rejected';
-  }
-
-  @override
-  String toString() =>
-      'ModerationReport(score: $moderationScore, status: $status)';
+  ModerationResult.approved() : isApproved = true, reason = null;
+  ModerationResult.rejected({required this.reason}) : isApproved = false;
 }

@@ -1,90 +1,134 @@
-/// Chat Summarization Service
-/// Provides AI-based chat summary generation
+import 'package:flutter/foundation.dart';
+import 'package:firebase_ai/firebase_ai.dart';
+import 'package:mainproject/constants.dart';
+
+/// AI-powered Chat Summarization Service using Firebase AI Logic (Gemini)
 class ChatSummarizationService {
   static final ChatSummarizationService _instance =
       ChatSummarizationService._internal();
 
-  factory ChatSummarizationService() {
-    return _instance;
-  }
+  factory ChatSummarizationService() => _instance;
 
   ChatSummarizationService._internal();
 
-  /// Summarize chat messages
-  /// In production, this would call an AI API
-  Future<String> summarizeMessages(List<String> messages) async {
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 800));
+  /// In-memory cache: messageId → summary
+  final Map<String, String> _cache = {};
+
+  /// Gemini model via Firebase AI Logic (lazy-initialized)
+  GenerativeModel? _model;
+
+  /// Returns the Gemini model, creating it on first use
+  GenerativeModel get _geminiModel {
+    _model ??= FirebaseAI.googleAI().generativeModel(
+      model: GeminiConfig.model,
+      generationConfig: GenerationConfig(
+        temperature: 0.3,
+        maxOutputTokens: 256,
+      ),
+    );
+    return _model!;
+  }
+
+  /// Check if a message is long enough to warrant summarization
+  bool canSummarize(String content) {
+    return content.trim().length >= GeminiConfig.minLengthForSummary;
+  }
+
+  /// Summarize a single long message.
+  /// Returns the cached summary if available, otherwise calls Gemini.
+  Future<String> summarizeMessage(String messageId, String content) async {
+    // Return cached summary if exists
+    if (_cache.containsKey(messageId)) {
+      return _cache[messageId]!;
+    }
+
+    if (content.trim().isEmpty) {
+      return 'No content to summarize.';
+    }
+
+    try {
+      final prompt =
+          '''
+You are a helpful assistant inside a student collaboration app called StudWise.
+Summarize the following chat message in 1-3 concise bullet points.
+Keep it short, clear, and student-friendly. Use plain language.
+Do NOT add any extra commentary — just the bullet points.
+
+Message:
+"""
+$content
+"""
+''';
+
+      final response = await _geminiModel.generateContent([
+        Content.text(prompt),
+      ]);
+
+      final summary = response.text?.trim() ?? 'Could not generate summary.';
+      // Cache the result so we don't need to call again
+      _cache[messageId] = summary;
+      return summary;
+    } catch (e) {
+      debugPrint('Summarize error: $e');
+      return 'Unable to generate summary. Please try again in a moment.';
+    }
+  }
+
+  /// Summarize the entire chat (all recent text messages in a room).
+  /// [messages] is a list of maps with 'senderName' and 'content' keys.
+  Future<String> summarizeChat(
+    String roomId,
+    List<Map<String, String>> messages,
+  ) async {
+    final cacheKey = 'room_${roomId}_${messages.length}';
+    if (_cache.containsKey(cacheKey)) {
+      return _cache[cacheKey]!;
+    }
 
     if (messages.isEmpty) {
       return 'No messages to summarize.';
     }
 
-    // Mock summarization logic
-    final wordCount = messages.join(' ').split(' ').length;
-    final messageCount = messages.length;
+    try {
+      final formattedMessages = messages
+          .map((m) => '${m['senderName']}: ${m['content']}')
+          .join('\n');
 
-    return '''
-Summary of Discussion:
-- Total messages: $messageCount
-- Total words: $wordCount
-- Key Topics: Academic collaboration, communication tools, learning platforms
-- Main Points:
-  1. Discussion centered around effective student communication
-  2. Identified need for focused, distraction-free platform
-  3. Proposed solution: Subject-based and project-based rooms
-  4. Features include real-time messaging and AI enhancements
+      final prompt =
+          '''
+You are a helpful assistant inside a student collaboration app called StudWise.
+Provide a comprehensive yet concise "Quick Rundown" of the following chat conversation.
+
+The rundown should include:
+1. **The Core Topic**: What were they talking about? (1 sentence)
+2. **Key Takeaways**: Detailed bullet points explaining the main arguments, facts, or ideas shared.
+3. **Decisions or Action Items**: If any specific plans were made or tasks assigned, list them clearly.
+
+Keep the tone student-friendly, encouraging, and clear.
+Avoid generic summaries; use specific details from the chat.
+
+Chat Messages:
+"""
+$formattedMessages
+"""
 ''';
-  }
 
-  /// Generate key points from messages
-  Future<List<String>> extractKeyPoints(List<String> messages) async {
-    await Future.delayed(const Duration(milliseconds: 600));
+      final response = await _geminiModel.generateContent([
+        Content.text(prompt),
+      ]);
 
-    return [
-      'Students need focused communication platforms',
-      'Subject-based and project-based rooms are important',
-      'Real-time messaging enables efficient collaboration',
-      'AI features like summarization improve usability',
-      'Content moderation ensures respectful communication',
-    ];
-  }
-
-  /// Generate action items from messages
-  Future<List<String>> extractActionItems(List<String> messages) async {
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    return [
-      'Set up public rooms for each subject',
-      'Create project-based private rooms',
-      'Implement real-time messaging',
-      'Deploy content moderation system',
-      'Add voice message support',
-    ];
-  }
-
-  /// Check sentiment of messages (positive, neutral, negative)
-  Future<String> analyzeSentiment(List<String> messages) async {
-    await Future.delayed(const Duration(milliseconds: 400));
-
-    // Mock sentiment analysis
-    int positiveWords = 0;
-    int negativeWords = 0;
-
-    const positiveKeywords = ['great', 'good', 'excellent', 'amazing', 'perfect'];
-    const negativeKeywords = ['bad', 'poor', 'terrible', 'awful', 'hate'];
-
-    for (var message in messages) {
-      final lowerMessage = message.toLowerCase();
-      positiveWords += positiveKeywords.where((w) => lowerMessage.contains(w)).length;
-      negativeWords += negativeKeywords.where((w) => lowerMessage.contains(w)).length;
+      final summary = response.text?.trim() ?? 'Could not generate summary.';
+      _cache[cacheKey] = summary;
+      return summary;
+    } catch (e) {
+      debugPrint('Chat summarize error: $e');
+      return 'Unable to generate summary. Please try again in a moment.';
     }
-
-    if (positiveWords > negativeWords) {
-      return 'positive';
-    } else if (negativeWords > positiveWords) {
-      return 'negative';
-    }
-    return 'neutral';
   }
+
+  /// Clear all cached summaries
+  void clearCache() => _cache.clear();
+
+  /// Remove a specific cached summary
+  void removeCached(String key) => _cache.remove(key);
 }

@@ -9,11 +9,11 @@ class Validators {
     }
 
     final emailRegex = RegExp(
-      r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+      r'^[a-zA-Z0-9._%+-]+@gmail\.com$',
     );
 
     if (!emailRegex.hasMatch(value)) {
-      return AppStrings.emailInvalid;
+      return 'Only @gmail.com addresses are allowed';
     }
 
     return null;
@@ -26,7 +26,11 @@ class Validators {
     }
 
     if (value.length < 6) {
-      return AppStrings.passwordTooShort;
+      return 'Password must be at least 6 characters';
+    }
+
+    if (!value.contains(RegExp(r'[A-Z]'))) {
+      return 'Password must contain at least one uppercase letter';
     }
 
     return null;
@@ -51,8 +55,8 @@ class Validators {
       return AppStrings.nameRequired;
     }
 
-    if (value.length < 2) {
-      return 'Name must be at least 2 characters';
+    if (value.length < 4) {
+      return 'Name must be at least 4 characters';
     }
 
     return null;

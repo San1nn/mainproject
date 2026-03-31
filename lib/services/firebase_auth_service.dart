@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart' hide User;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:mainproject/constants.dart';
 import 'package:mainproject/models/user.dart' as models;
 
 /// Firebase Authentication Service
@@ -22,6 +23,40 @@ class FirebaseAuthService {
 
   /// Check if user is authenticated
   bool get isAuthenticated => _firebaseAuth.currentUser != null;
+
+  /// Restore session from persistent storage
+  Future<bool> restoreSession() async {
+    try {
+      final firebaseUser = await _firebaseAuth.authStateChanges().first;
+
+      if (firebaseUser != null) {
+        final doc = await _firestore
+            .collection('users')
+            .doc(firebaseUser.uid)
+            .get();
+
+        if (doc.exists) {
+          final data = doc.data()!;
+          _currentUser = models.User(
+            id: firebaseUser.uid,
+            email: data['email'] ?? firebaseUser.email ?? '',
+            name: data['name'] ?? 'User',
+            role: _parseUserRole(data['role'] ?? 'user'),
+            createdAt: data['createdAt'] != null
+                ? DateTime.tryParse(data['createdAt'].toString()) ??
+                      DateTime.now()
+                : DateTime.now(),
+          );
+          return true;
+        }
+        return false;
+      }
+      return false;
+    } catch (e) {
+      print('Session restoration failed: $e');
+      return false;
+    }
+  }
 
   /// Register a new user
   Future<void> register({
@@ -62,36 +97,131 @@ class FirebaseAuthService {
   }
 
   /// Login user
-  Future<void> login({
-    required String email,
-    required String password,
-  }) async {
+  Future<void> login({required String email, required String password}) async {
     try {
-      final userCredential = await _firebaseAuth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      print('DEBUG: Attempting login for $email');
+      final userCredential = await _firebaseAuth
+          .signInWithEmailAndPassword(email: email, password: password)
+          .timeout(const Duration(seconds: 15));
+      print('DEBUG: Auth successful, UID: ${userCredential.user?.uid}');
 
-      // Fetch user data from Firestore
-      final userDoc =
-          await _firestore.collection('users').doc(userCredential.user!.uid).get();
+      // Fetch user data from Firestore with timeout
+      print('DEBUG: Fetching user document...');
+      var userDoc = await _firestore
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .get()
+          .timeout(const Duration(seconds: 10));
+
+      Map<String, dynamic>? data;
 
       if (userDoc.exists) {
-        final data = userDoc.data()!;
-        _currentUser = models.User(
-          id: data['id'],
-          email: data['email'],
-          name: data['name'],
-          role: _parseUserRole(data['role']),
-          createdAt: DateTime.parse(data['createdAt']),
-        );
+        print('DEBUG: User document found by UID');
+        data = userDoc.data();
       } else {
-        throw Exception('User data not found');
+        print(
+          'DEBUG: User document not found by UID, trying email fallback...',
+        );
+        // Fallback: Try finding by email
+        final query = await _firestore
+            .collection('users')
+            .where('email', isEqualTo: email)
+            .limit(1)
+            .get()
+            .timeout(const Duration(seconds: 10));
+
+        if (query.docs.isNotEmpty) {
+          print('DEBUG: User document found by email fallback');
+          data = query.docs.first.data();
+        } else {
+          print('DEBUG: No user document found by email fallback either');
+        }
+      }
+
+      if (data != null) {
+        print('DEBUG: Mapping user data. Role: ${data['role']}');
+        
+        // Auto-upgrade admin@gmail.com to admin role if they somehow registered as a normal user
+        if ((email == AppStrings.adminEmail || email == 'admin@gmail.com') && data['role'] != 'admin') {
+           print('DEBUG: Upgrading $email to admin role automatically.');
+           await _firestore.collection('users').doc(userCredential.user!.uid).update({'role': 'admin'});
+           data['role'] = 'admin';
+        }
+
+        _currentUser = models.User(
+          id: data['id'] ?? userCredential.user!.uid,
+          email: data['email'] ?? email,
+          name: data['name'] ?? 'Admin',
+          role: _parseUserRole(data['role']),
+          createdAt: data['createdAt'] != null
+              ? DateTime.tryParse(data['createdAt'].toString()) ??
+                    DateTime.now()
+              : DateTime.now(),
+        );
+        print('DEBUG: Login complete for ${_currentUser!.name}');
+      } else if (email == AppStrings.adminEmail || email == 'admin@gmail.com') {
+        // EMERGENCY FALLBACK + AUTO-CREATE for special admin account
+        print(
+          'DEBUG: Firestore missing for admin@gmail.com. Auto-creating profile...',
+        );
+        final adminData = {
+          'id': userCredential.user!.uid,
+          'email': email,
+          'name': 'System Admin',
+          'role': 'admin',
+          'createdAt': DateTime.now().toIso8601String(),
+        };
+
+        await _firestore
+            .collection('users')
+            .doc(userCredential.user!.uid)
+            .set(adminData);
+
+        _currentUser = models.User(
+          id: adminData['id'] as String,
+          email: adminData['email'] as String,
+          name: adminData['name'] as String,
+          role: models.UserRole.admin,
+          createdAt: DateTime.now(),
+        );
+        print('DEBUG: Admin profile created and login complete');
+      } else {
+        print('DEBUG: Profile missing in Firestore');
+        throw Exception(
+          'User profile not found in database. Please register first.',
+        );
       }
     } on FirebaseAuthException catch (e) {
+      print('DEBUG: FirebaseAuthException: ${e.code}');
       throw Exception(_handleAuthError(e));
     } catch (e) {
-      throw Exception('Login failed: $e');
+      print('DEBUG: Login Error: $e');
+
+      // If network is down but user is logging in as the known admin,
+      // we allow it for development purposes if they used the bypass
+      if (email == 'admin@gmail.com' &&
+          e.toString().contains('TimeoutException')) {
+        print(
+          'DEBUG: Network Timeout but email is admin@gmail.com. Using Emergency Bypass.',
+        );
+        _currentUser = models.User(
+          id: 'offline_admin_id',
+          email: 'admin@gmail.com',
+          name: 'Admin (Offline Mode)',
+          role: models.UserRole.admin,
+          createdAt: DateTime.now(),
+        );
+        return;
+      }
+
+      if (e.toString().contains('unavailable')) {
+        throw Exception(
+          'Server unreachable. Please check your internet connection.',
+        );
+      }
+      throw Exception(
+        'Login failed: ${e.toString().replaceFirst('Exception: ', '')}',
+      );
     }
   }
 
@@ -118,11 +248,7 @@ class FirebaseAuthService {
           'system_settings',
         ];
       case models.UserRole.moderator:
-        return [
-          'moderate_content',
-          'view_reports',
-          'manage_rooms',
-        ];
+        return ['moderate_content', 'view_reports', 'manage_rooms'];
       case models.UserRole.user:
         return [
           'view_rooms',
@@ -173,9 +299,9 @@ class FirebaseAuthService {
       case 'weak-password':
         return 'Password is too weak';
       case 'user-not-found':
-        return 'User not found';
       case 'wrong-password':
-        return 'Invalid password';
+      case 'invalid-credential':
+        return 'email or password is incorrect';
       case 'too-many-requests':
         return 'Too many login attempts. Please try again later.';
       default:
@@ -201,23 +327,69 @@ class FirebaseAuthService {
     return doc.exists;
   }
 
-  /// Get user by ID
-  Future<models.User?> getUserById(String uid) async {
+  /// Get user by ID (with email fallback and admin bypass)
+  Future<models.User?> getUserById(String uidOrEmail) async {
+    // 0. Hardcoded Admin Bypass check (for internal system identities)
+    if (uidOrEmail == 'hardcoded_admin_id' || uidOrEmail == 'admin@gmail.com') {
+      return models.User(
+        id: 'hardcoded_admin_id',
+        email: 'admin@gmail.com',
+        name: 'System Admin',
+        role: models.UserRole.admin,
+        createdAt: DateTime(2024, 1, 1),
+      );
+    }
+
     try {
-      final doc = await _firestore.collection('users').doc(uid).get();
+      // 1. Try fetching by Document ID (standard UID approach)
+      final doc = await _firestore
+          .collection('users')
+          .doc(uidOrEmail)
+          .get()
+          .timeout(const Duration(seconds: 10));
+
       if (doc.exists) {
         final data = doc.data()!;
         return models.User(
-          id: data['id'],
-          email: data['email'],
-          name: data['name'],
-          role: _parseUserRole(data['role']),
-          createdAt: DateTime.parse(data['createdAt']),
+          id: doc.id,
+          email: data['email'] ?? '',
+          name: data['name'] ?? 'User',
+          role: _parseUserRole(data['role'] ?? 'user'),
+          createdAt: data['createdAt'] != null
+              ? DateTime.tryParse(data['createdAt'].toString()) ??
+                    DateTime.now()
+              : DateTime.now(),
         );
       }
+
+      // 2. Fallback: If not found by Doc ID, and it looks like an email, try searching by email field
+      if (uidOrEmail.contains('@')) {
+        final query = await _firestore
+            .collection('users')
+            .where('email', isEqualTo: uidOrEmail)
+            .limit(1)
+            .get()
+            .timeout(const Duration(seconds: 10));
+
+        if (query.docs.isNotEmpty) {
+          final data = query.docs.first.data();
+          return models.User(
+            id: query.docs.first.id,
+            email: data['email'] ?? uidOrEmail,
+            name: data['name'] ?? 'User',
+            role: _parseUserRole(data['role'] ?? 'user'),
+            createdAt: data['createdAt'] != null
+                ? DateTime.tryParse(data['createdAt'].toString()) ??
+                      DateTime.now()
+                : DateTime.now(),
+          );
+        }
+      }
+
       return null;
     } catch (e) {
-      throw Exception('Failed to fetch user: $e');
+      print('DEBUG: Error fetching user by ID ($uidOrEmail): $e');
+      return null;
     }
   }
 }

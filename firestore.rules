@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global admin check function
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.email == 'admin@gmail.com' || 
+        request.auth.token.email == 'admin@example.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Any authenticated user can read profiles
+      allow read: if request.auth != null;
+      // You can only create a profile for your own UID
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // You can update your own profile, admins can update any
+      allow update: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      // ONLY Admins can delete users
+      allow delete: if isAdmin();
+    }
+
+    // Rooms collection
+    match /rooms/{roomId} {
+      allow read, create, update: if request.auth != null;
+      
+      // Only Admins OR the Room Creator can delete a room
+      allow delete: if request.auth != null && (
+        isAdmin() ||
+        resource.data.creatorId == request.auth.uid
+      );
+    }
+
+    // Messages collection
+    match /messages/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mainproject/constants.dart';
 import 'package:mainproject/services/auth_service.dart';
+import 'package:mainproject/widgets/user_avatar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,6 +16,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationsEnabled = true;
   bool _soundEnabled = true;
   bool _darkModeEnabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+      _soundEnabled = prefs.getBool('sound_enabled') ?? true;
+      _darkModeEnabled = prefs.getBool('dark_mode_enabled') ?? false;
+    });
+  }
+
+  Future<void> _updateSetting(String key, bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(key, value);
+    setState(() {
+      if (key == 'notifications_enabled') _notificationsEnabled = value;
+      if (key == 'sound_enabled') _soundEnabled = value;
+      if (key == 'dark_mode_enabled') _darkModeEnabled = value;
+    });
+    
+    if (mounted) {
+      if (key == 'sound_enabled' || key == 'dark_mode_enabled') {
+        _comingSoon();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${key.replaceAll('_', ' ').replaceFirst('enabled', '').trim()} updated'),
+            duration: const Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
 
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
@@ -42,11 +83,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  void _comingSoon() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppColors.primary,
+        content: const Row(
+          children: [
+            Icon(Icons.info_outline, color: Colors.white),
+            SizedBox(width: 12),
+            Text('This feature is coming soon!', 
+              style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+          ],
+        ),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUser = _authService.currentUser;
 
     return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
         title: const Text('Settings'),
         elevation: 0,
@@ -54,67 +115,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            // Profile Section
+            // Profile Section with gradient
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.1),
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.primary.withValues(alpha: 0.2),
+                    AppColors.primaryDark.withValues(alpha: 0.1),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
                 border: Border(
                   bottom: BorderSide(
-                    color: AppColors.border,
+                    color: Colors.white.withValues(alpha: 0.1),
                     width: 1,
                   ),
                 ),
               ),
               child: Column(
                 children: [
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      borderRadius: BorderRadius.circular(40),
-                    ),
-                    child: const Icon(
-                      Icons.person,
-                      size: 40,
-                      color: Colors.white,
-                    ),
+                  UserAvatar(
+                    seed: currentUser?.id ?? currentUser?.email ?? 'User',
+                    fallbackInitial: (currentUser?.name != null && currentUser!.name.isNotEmpty) 
+                        ? currentUser.name[0].toUpperCase() 
+                        : 'U',
+                    radius: 40,
                   ),
                   const SizedBox(height: 16),
                   Text(
                     currentUser?.name ?? 'User',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
+                      color: Colors.white.withValues(alpha: 0.95),
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     currentUser?.email ?? '',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: AppColors.textSecondary,
+                      color: Colors.white.withValues(alpha: 0.6),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.primary,
+                      gradient: LinearGradient(
+                        colors: [AppColors.secondary, AppColors.secondaryLight],
+                      ),
                       borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.secondary.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: Text(
-                      currentUser?.role.toString().split('.').last.toUpperCase() ??
-                          'USER',
+                      currentUser?.role.toString().split('.').last.toUpperCase() ?? 'USER',
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ),
@@ -127,16 +198,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _buildSwitchTile(
               'Enable Notifications',
               _notificationsEnabled,
-              (value) {
-                setState(() => _notificationsEnabled = value);
-              },
+              (value) => _updateSetting('notifications_enabled', value),
             ),
             _buildSwitchTile(
               'Sound',
               _soundEnabled,
-              (value) {
-                setState(() => _soundEnabled = value);
-              },
+              (value) => _updateSetting('sound_enabled', value),
             ),
 
             // Display Section
@@ -144,26 +211,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _buildSwitchTile(
               'Dark Mode',
               _darkModeEnabled,
-              (value) {
-                setState(() => _darkModeEnabled = value);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Dark mode feature coming soon!'),
-                  ),
-                );
-              },
+              (value) => _updateSetting('dark_mode_enabled', value),
             ),
             _buildListTile(
               icon: Icons.text_fields,
               title: 'Text Size',
               subtitle: 'Medium',
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Text size settings coming soon!'),
-                  ),
-                );
-              },
+              onTap: _comingSoon,
             ),
 
             // Account Section
@@ -172,25 +226,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.security,
               title: 'Change Password',
               subtitle: 'Update your password',
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Change password feature coming soon!'),
-                  ),
-                );
-              },
+              onTap: _comingSoon,
             ),
             _buildListTile(
               icon: Icons.privacy_tip,
               title: 'Privacy',
               subtitle: 'Manage your privacy settings',
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Privacy settings coming soon!'),
-                  ),
-                );
-              },
+              onTap: _comingSoon,
             ),
 
             // About Section
@@ -205,35 +247,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.description,
               title: 'Terms & Conditions',
               subtitle: 'Review our terms',
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Terms & Conditions coming soon!'),
-                  ),
-                );
-              },
+              onTap: _comingSoon,
             ),
 
             // Logout Button
             Padding(
               padding: const EdgeInsets.all(24),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppColors.error, AppColors.error.withValues(alpha: 0.7)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
-                  onPressed: _handleLogout,
-                  child: const Text(
-                    'Logout',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.error.withValues(alpha: 0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _handleLogout,
+                    borderRadius: BorderRadius.circular(12),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                      child: Center(
+                        child: Text(
+                          'Logout',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -252,10 +305,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         alignment: Alignment.centerLeft,
         child: Text(
           title,
-          style: const TextStyle(
-            fontSize: 14,
+          style: TextStyle(
+            fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: AppColors.textSecondary,
+            color: Colors.white.withValues(alpha: 0.5),
+            letterSpacing: 0.5,
           ),
         ),
       ),
@@ -268,11 +322,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ValueChanged<bool> onChanged,
   ) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(
-            color: AppColors.border,
+            color: Colors.white.withValues(alpha: 0.1),
             width: 1,
           ),
         ),
@@ -282,15 +336,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 15,
-              color: AppColors.textPrimary,
+              color: Colors.white.withValues(alpha: 0.9),
+              fontWeight: FontWeight.w500,
             ),
           ),
           Switch(
             value: value,
             onChanged: onChanged,
             activeThumbColor: AppColors.primary,
+            activeTrackColor: AppColors.primary.withValues(alpha: 0.4),
+            inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
           ),
         ],
       ),
@@ -310,14 +367,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
-              color: AppColors.border,
+              color: Colors.white.withValues(alpha: 0.1),
               width: 1,
             ),
           ),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 24, color: AppColors.primary),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                icon,
+                size: 20,
+                color: AppColors.primary,
+              ),
+            ),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
@@ -325,24 +394,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w500,
-                      color: AppColors.textPrimary,
+                      color: Colors.white.withValues(alpha: 0.9),
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     subtitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
-                      color: AppColors.textSecondary,
+                      color: Colors.white.withValues(alpha: 0.5),
                     ),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+            Icon(
+              Icons.chevron_right,
+              color: Colors.white.withValues(alpha: 0.4),
+            ),
           ],
         ),
       ),
@@ -353,27 +425,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('About MainProject'),
+        backgroundColor: const Color(0xFF1A1F3A),
+        title: Text(
+          'About MainProject',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.95),
+          ),
+        ),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'Student Communication and Learning Platform',
-                style: TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
               ),
               const SizedBox(height: 12),
-              const Text('Version: 1.0.0\nBuild: 1'),
-              const SizedBox(height: 16),
-              const Text(
-                'A Flutter-based platform designed for academic collaboration and student communication.',
-                style: TextStyle(fontSize: 13),
+              Text(
+                'Version: 1.0.0\nBuild: 1',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7),
+                ),
               ),
               const SizedBox(height: 16),
-              const Text(
+              Text(
+                'A Flutter-based platform designed for academic collaboration and student communication.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white.withValues(alpha: 0.7),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
                 '© 2026 MainProject. All rights reserved.',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.white.withValues(alpha: 0.4),
+                ),
               ),
             ],
           ),
@@ -381,7 +473,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+            child: Text(
+              'Close',
+              style: TextStyle(
+                color: AppColors.primary,
+              ),
+            ),
           ),
         ],
       ),

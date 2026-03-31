@@ -1,10 +1,10 @@
 import 'package:mainproject/models/user.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_auth_service.dart';
 
-/// Authentication Service - Uses Firebase when available, falls back to mock
+/// Authentication Service - Firebase Only with Persistent Login
 class AuthService {
   static final AuthService _instance = AuthService._internal();
-  static bool _useFirebase = true; // Toggle between Firebase and mock
 
   factory AuthService() {
     return _instance;
@@ -15,26 +15,41 @@ class AuthService {
   // Firebase service
   late final FirebaseAuthService _firebaseService = FirebaseAuthService();
 
-  // Mock data
-  User? _currentUser;
-  final Map<String, String> _userDatabase = {
-    'admin@example.com': 'password123', // Demo admin account
-    'user@example.com': 'password123',  // Demo user account
-  };
+  static const String _authTokenKey = 'auth_token';
+  static const String _userEmailKey = 'user_email';
+
+  /// Initialize persistent login - call on app startup
+  Future<bool> initializePersistentLogin() async {
+    try {
+      // Try to restore session from Firebase
+      final restored = await _firebaseService.restoreSession();
+
+      final prefs = await SharedPreferences.getInstance();
+
+      if (restored) {
+        // Session restored successfully, ensure prefs are synced
+        final currentUser = _firebaseService.currentUser;
+        if (currentUser != null) {
+          await _savePersistentLogin(currentUser.email);
+        }
+        return true;
+      } else {
+        // No valid session, clear stored data
+        await prefs.remove(_authTokenKey);
+        await prefs.remove(_userEmailKey);
+        return false;
+      }
+    } catch (e) {
+      print('Error initializing persistent login: $e');
+      return false;
+    }
+  }
 
   /// Get current authenticated user
-  User? get currentUser => _currentUser ?? _firebaseService.currentUser;
+  User? get currentUser => _firebaseService.currentUser;
 
   /// Check if user is authenticated
-  bool get isAuthenticated =>
-      _useFirebase
-          ? _firebaseService.isAuthenticated
-          : _currentUser != null;
-
-  /// Enable/Disable Firebase (for testing)
-  static void setUseFirebase(bool useFirebase) {
-    _useFirebase = useFirebase;
-  }
+  bool get isAuthenticated => _firebaseService.isAuthenticated;
 
   /// Register a new user
   Future<void> register({
@@ -43,47 +58,51 @@ class AuthService {
     required String name,
   }) async {
     try {
-      if (_useFirebase) {
-        await _firebaseService.register(
-          email: email,
-          password: password,
-          name: name,
-        );
-        _currentUser = _firebaseService.currentUser;
-      } else {
-        // Mock registration
-        await _mockRegister(email, password, name);
-      }
+      await _firebaseService.register(
+        email: email,
+        password: password,
+        name: name,
+      );
+
+      // Save login info for persistent login
+      await _savePersistentLogin(email);
     } catch (e) {
       rethrow;
     }
   }
 
   /// Login user
-  Future<void> login({
-    required String email,
-    required String password,
-  }) async {
+  Future<void> login({required String email, required String password}) async {
     try {
-      if (_useFirebase) {
-        await _firebaseService.login(email: email, password: password);
-        _currentUser = _firebaseService.currentUser;
-      } else {
-        // Mock login
-        await _mockLogin(email, password);
-      }
+      await _firebaseService.login(email: email, password: password);
+
+      // Save login info for persistent login
+      await _savePersistentLogin(email);
     } catch (e) {
       rethrow;
     }
   }
 
-  /// Logout current user
+  /// Save persistent login data
+  Future<void> _savePersistentLogin(String email) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_userEmailKey, email);
+      await prefs.setBool(_authTokenKey, true);
+    } catch (e) {
+      print('Error saving persistent login: $e');
+    }
+  }
+
+  /// Logout current user and clear persistent login
   Future<void> logout() async {
     try {
-      if (_useFirebase) {
-        await _firebaseService.logout();
-      }
-      _currentUser = null;
+      await _firebaseService.logout();
+
+      // Clear persistent login data
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_authTokenKey);
+      await prefs.remove(_userEmailKey);
     } catch (e) {
       rethrow;
     }
@@ -91,93 +110,7 @@ class AuthService {
 
   /// Get user role permissions
   List<String> getUserPermissions(UserRole role) {
-    if (_useFirebase) {
-      return _firebaseService.getUserPermissions(role);
-    }
-    
-    switch (role) {
-      case UserRole.admin:
-        return [
-          'manage_users',
-          'view_analytics',
-          'manage_rooms',
-          'moderate_content',
-          'view_reports',
-          'system_settings',
-        ];
-      case UserRole.moderator:
-        return [
-          'moderate_content',
-          'view_reports',
-          'manage_rooms',
-        ];
-      case UserRole.user:
-        return [
-          'view_rooms',
-          'send_messages',
-          'create_private_rooms',
-          'join_public_rooms',
-        ];
-    }
-  }
-
-  // Mock Methods
-  Future<void> _mockRegister(String email, String password, String name) async {
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (_userDatabase.containsKey(email)) {
-      throw Exception('Email already registered');
-    }
-
-    if (email.isEmpty || password.isEmpty || name.isEmpty) {
-      throw Exception('All fields are required');
-    }
-
-    if (password.length < 6) {
-      throw Exception('Password must be at least 6 characters');
-    }
-
-    // Store user credentials
-    _userDatabase[email] = password;
-
-    // Create user object
-    _currentUser = User(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      email: email,
-      name: name,
-      role: UserRole.user,
-      createdAt: DateTime.now(),
-    );
-  }
-
-  Future<void> _mockLogin(String email, String password) async {
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (!_userDatabase.containsKey(email)) {
-      throw Exception('User not found');
-    }
-
-    if (_userDatabase[email] != password) {
-      throw Exception('Invalid password');
-    }
-
-    // Determine role based on email
-    UserRole role = UserRole.user;
-    if (email == 'admin@example.com') {
-      role = UserRole.admin;
-    } else if (email == 'moderator@example.com') {
-      role = UserRole.moderator;
-    }
-
-    _currentUser = User(
-      id: email.hashCode.toString(),
-      email: email,
-      name: email.split('@').first,
-      role: role,
-      createdAt: DateTime.now(),
-    );
+    return _firebaseService.getUserPermissions(role);
   }
 
   /// Check if user has permission
@@ -186,5 +119,10 @@ class AuthService {
     if (user == null) return false;
     final permissions = getUserPermissions(user.role);
     return permissions.contains(permission);
+  }
+
+  /// Get user by ID
+  Future<User?> getUserById(String uid) async {
+    return _firebaseService.getUserById(uid);
   }
 }
